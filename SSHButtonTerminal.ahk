@@ -524,7 +524,9 @@ BuildGui() {
     TermGui := Gui("-Caption +Parent" MainGui.Hwnd " +0x02000000")
     TermGui.BackColor := "000000"
     TermGui.SetFont("s11", "Segoe UI")
-    TermLabel := TermGui.Add("Text", "x0 y0 w700 h500 Center 0x200 cWhite BackgroundTrans", "Not connected.`nEnter Host / User and press Connect.")
+    ; Solid background (not BackgroundTrans): with WS_CLIPCHILDREN a transparent
+    ; label means nothing ever paints this area, leaving a stale "ghost" image.
+    TermLabel := TermGui.Add("Text", "x0 y0 w700 h500 Center 0x200 cWhite Background000000", "Not connected.`nEnter Host / User and press Connect.")
     TermGui.Show("x10 y78 w700 h500 NoActivate")
 
     RefreshVarLV()
@@ -724,27 +726,54 @@ OnMainClose(*) {
 }
 
 ; ======================================================= KiTTY embedding ===
-FindTermWindow(pid) {
-    for h in WinGetList("ahk_pid " pid) {
+; Set of all top-level windows that exist right now (taken before launching).
+SnapshotWindows() {
+    m := Map()
+    for h in WinGetList()
+        m[h] := true
+    return m
+}
+
+; Look for a NEW window (not in 'before') that belongs to the KiTTY we launched.
+; Matches by PID, by executable name, or by PuTTY/KiTTY class, so it still works
+; when KiTTY relaunches itself under a different PID or uses another class name.
+; Sets 'dialog' to true if a KiTTY dialog (e.g. host-key alert) is showing.
+FindNewTerm(before, pid, exeName, &dialog) {
+    dialog := false
+    for h in WinGetList() {
+        if before.Has(h)
+            continue
         try {
-            cls := WinGetClass("ahk_id " h)
+            id := "ahk_id " h
+            cls := WinGetClass(id)
+            wpid := WinGetPID(id)
+            pname := WinGetProcessName(id)
+            style := WinGetStyle(id)
         } catch {
             continue
         }
-        if cls = "PuTTY" || cls = "KiTTY"
+        ours := (wpid = pid) || (pname = exeName) || cls = "PuTTY" || cls = "KiTTY"
+        if !ours
+            continue
+        if cls = "#32770" {          ; standard dialog box -> user must answer it
+            dialog := true
+            continue
+        }
+        if style & 0xC00000          ; has a caption = main terminal window
             return h
     }
     return 0
 }
 
-; Fallback when the launched process hands over to another one (portable build).
-FindAnyKitty() {
-    for cls in ["KiTTY", "PuTTY"] {
-        list := WinGetList("ahk_class " cls)
-        if list.Length
-            return list[1]
+; Describe new windows for troubleshooting when nothing matched.
+DescribeNewWindows(before) {
+    out := ""
+    for h in WinGetList() {
+        if before.Has(h)
+            continue
+        try out .= WinGetProcessName("ahk_id " h) "  [" WinGetClass("ahk_id " h) "]  " WinGetTitle("ahk_id " h) "`n"
     }
-    return 0
+    return out = "" ? "(no new windows appeared)" : out
 }
 
 Connect(*) {
@@ -782,6 +811,8 @@ Connect(*) {
     target := prefix host
     cmd := '"' path '" -ssh ' target ' -P ' port
     pid := 0
+    SplitPath(path, &exeName)
+    before := SnapshotWindows()
     try {
         Run(cmd, , , &pid)
     } catch as e {
@@ -797,15 +828,11 @@ Connect(*) {
     limit := 15000
     hwnd := 0
     while true {
-        hwnd := FindTermWindow(pid)
+        hwnd := FindNewTerm(before, pid, exeName, &dialog)
         if hwnd
             break
-        if !ProcessExist(pid) {
-            hwnd := FindAnyKitty()
-            break
-        }
-        ; a dialog (e.g. host key alert) exists: give the user more time
-        if WinGetList("ahk_pid " pid).Length > 0
+        ; a KiTTY dialog (e.g. host key alert) is open: give the user more time
+        if dialog
             limit := 120000
         if A_TickCount - start > limit
             break
@@ -819,6 +846,7 @@ Connect(*) {
         KPid := 0
         SetConn("Disconnected")
         SetStatus("KiTTY window did not appear.")
+        MsgBox("The KiTTY terminal window was not detected.`n`nNew windows seen:`n" DescribeNewWindows(before), "Connect", "Icon!")
         return
     }
     KHwnd := hwnd
