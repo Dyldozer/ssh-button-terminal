@@ -8,7 +8,7 @@ An AutoHotkey v2 GUI that docks a real [KiTTY](https://www.9bis.net/kitty/) SSH 
 - Buttons organized into groups, each sending one or more commands
 - `{VARIABLE}` placeholders filled from a Variables panel, e.g. `curl -X GET http://{IP}/`
 - Built-in variables `{HOST}` and `{USER}` from the connection bar
-- Host drop-down filled from the `HostList` array at the top of the script
+- Host drop-down filled from the `HostList` map (name → address) at the top of the script
 - Cancel button sends Ctrl+C
 - Multi-command buttons with `#sleep <ms>` pauses and `#` comment lines
 - Button editor: create, edit, delete, duplicate, reorder, rename/delete groups
@@ -22,7 +22,7 @@ An AutoHotkey v2 GUI that docks a real [KiTTY](https://www.9bis.net/kitty/) SSH 
 
 ## Usage
 1. Run `SSHButtonTerminal.ahk`.
-2. Edit `HostList` at the top of the script, then pick a Host, enter a User and press **Connect**. Type your password in the terminal.
+2. Edit the `HostList` map (name → address) at the top of the script, then pick a Host, enter a User and press **Connect**. Type your password in the terminal.
 3. Select a variable, enter its value and press **Set**.
 4. Click buttons, or type in the Command box and press Enter.
 

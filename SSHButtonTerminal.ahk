@@ -13,11 +13,13 @@
 
 ; ---------------------------------------------------------------- globals ---
 ; ===== EDIT THIS LIST: hosts shown in the Host drop-down ====================
-global HostList := [
-    "192.168.1.10",
-    "192.168.1.20",
-    "server.example.com"
-]
+; Key = name shown in the drop-down, Value = address passed to Connect.
+; (AHK Maps list keys alphabetically, so the drop-down is sorted by name.)
+global HostList := Map(
+    "Web server",  "192.168.1.10",
+    "DB server",   "192.168.1.20",
+    "Example",     "server.example.com"
+)
 ; Process name of the terminal program your Connect command launches.
 ; Used to find its window after launch so it can be docked in the GUI.
 global KittyExeName := "kitty.exe"
@@ -397,9 +399,23 @@ ScanVars() {
     }
 }
 
+; Names (keys) of HostList, for the drop-down.
+HostNames() {
+    names := []
+    for k in HostList
+        names.Push(k)
+    return names
+}
+
+; Address (value) of the host currently selected in the drop-down.
+HostAddress() {
+    name := IsObject(HostDDL) ? HostDDL.Text : Settings["host"]
+    return HostList.Get(name, "")
+}
+
 GetVarValue(name) {
     switch StrUpper(name) {
-        case "HOST": return Trim(HostDDL.Text)
+        case "HOST": return HostAddress()
         case "USER": return Trim(UserEdit.Value)
     }
     return Vars.Get(name, "")
@@ -469,8 +485,10 @@ BuildGui() {
     ; --- connection bar (row 1)
     HostLbl := MainGui.Add("Text", "x10 y13 w32", "Host")
     ; Host list comes from the HostList array at the top of the script.
-    hostIdx := ArrIndex(HostList, Settings["host"])
-    HostDDL := MainGui.Add("DropDownList", "x45 y10 w170 r10" (HostList.Length ? " Choose" (hostIdx ? hostIdx : 1) : ""), HostList)
+    ; The drop-down shows the names; the saved setting is the selected name.
+    names := HostNames()
+    hostIdx := ArrIndex(names, Settings["host"])
+    HostDDL := MainGui.Add("DropDownList", "x45 y10 w170 r10" (names.Length ? " Choose" (hostIdx ? hostIdx : 1) : ""), names)
     ; Make the closed drop-down 23 px tall: CB_SETITEMHEIGHT on the selection
     ; field (wParam -1). The control adds ~6 px of border to this value.
     SendMessage(0x153, -1, 17, HostDDL)
@@ -768,7 +786,8 @@ Connect(*) {
         return
     }
     SyncSettings()
-    host := Settings["host"]
+    hostName := Settings["host"]                 ; name shown in the drop-down
+    host := HostList.Get(hostName, "")           ; its address from HostList
     user := Settings["user"]
     if host = "" {
         MsgBox("Please choose a host (edit HostList at the top of the script).", "Connect", "Icon!")
@@ -778,8 +797,8 @@ Connect(*) {
 
     prefix := (user != "" ? user "@" : "")
     target := prefix host
-    ; Replace with your own launch command. 'host', 'user' and 'target'
-    ; (user@host) are available here.
+    ; Replace with your own launch command. Available here: 'hostName' (the
+    ; drop-down name), 'host' (its address), 'user', and 'target' (user@address).
     cmd := "placeholder"
     pid := 0
     exeName := KittyExeName
@@ -823,7 +842,7 @@ Connect(*) {
     KHwnd := hwnd
     KPid := WinGetPID("ahk_id " hwnd)
     EmbedKitty(hwnd)
-    SetConn("Connected: " target)
+    SetConn("Connected: " hostName " (" target ")")
     SetStatus("Connected. Type your password in the terminal.")
     FocusTerminal()
 }
