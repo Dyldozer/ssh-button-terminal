@@ -23,6 +23,12 @@ global HostList := Map(
 ; Process name of the terminal program your Connect command launches.
 ; Used to find its window after launch so it can be docked in the GUI.
 global KittyExeName := "kitty.exe"
+; KiTTY writes its output here (add LogArg to your Connect command, see Connect).
+; The script watches it to detect password prompts. Deleted on disconnect/exit.
+global SessionLogFile := A_Temp "\SSHButtonTerminal_session.log"
+; When the LAST line of terminal output matches this regex, the Command box
+; switches to password mode (characters hidden). "i)" = case-insensitive.
+global PasswordPattern := "i)password"
 ; ============================================================================
 
 global CfgFile := A_ScriptDir "\SSHButtonTerminal.json"
@@ -47,6 +53,7 @@ global WinW := 1100, WinH := 720
 
 global KPid := 0, KHwnd := 0
 global Connecting := false, Busy := false
+global LogPos := 0, OutTail := "", PwMode := false   ; session-log watcher state
 
 ; editor globals
 global EdGui := "", EdLV := "", EdFilter := "", EdName := "", EdGroup := ""
@@ -731,6 +738,8 @@ OnMainClose(*) {
     if KPid
         try ProcessClose(KPid)
     SaveConfig()
+    Sleep(200)
+    try FileDelete(SessionLogFile)
     ExitApp()
 }
 
@@ -807,7 +816,14 @@ Connect(*) {
     target := prefix host
     ; Replace with your own launch command. Available here: 'hostName' (the
     ; drop-down name), 'host' (its address), 'user', and 'target' (user@address).
+    ; Append LogArg to your command so KiTTY logs its output for the
+    ; password-prompt detection, e.g.:  cmd := '"C:\kitty.exe" -ssh ' target LogArg
+    LogArg := ' -sessionlog "' SessionLogFile '"'
     cmd := "placeholder"
+    ; Start each session with an empty log (also avoids KiTTY's
+    ; "log file exists, overwrite?" prompt).
+    ResetLogWatch()
+    try FileDelete(SessionLogFile)
     pid := 0
     exeName := KittyExeName
     before := SnapshotWindows()
@@ -880,6 +896,71 @@ ResetConn(msg) {
     TermLabel.Visible := true
     SetConn("Disconnected")
     SetStatus(msg)
+    ResetLogWatch()
+    SetTimer(() => DeleteSessionLog(), -1500)   ; after KiTTY releases the file
+}
+
+; ================================================ output watcher ===========
+ResetLogWatch() {
+    global LogPos, OutTail
+    LogPos := 0
+    OutTail := ""
+    SetPasswordMode(false)
+}
+
+DeleteSessionLog() {
+    if !KHwnd
+        try FileDelete(SessionLogFile)
+}
+
+; Remove ANSI/VT escape sequences so only the visible text remains.
+StripAnsi(s) {
+    s := RegExReplace(s, "\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)")      ; OSC (window title etc.)
+    s := RegExReplace(s, "\x1B\[[0-9;?<>=!]*[ -/]*[@-~]")          ; CSI (colours, cursor)
+    s := RegExReplace(s, "\x1B[()*+][0-9A-Za-z]")                   ; charset selection
+    s := RegExReplace(s, "\x1B[^\[\]()*+]")                          ; other 2-char escapes
+    s := RegExReplace(s, "[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")         ; leftover control chars
+    return s
+}
+
+; Timer: read new output from the session log and toggle password mode
+; depending on whether the last line of output looks like a password prompt.
+CheckLog() {
+    global LogPos, OutTail
+    if !KHwnd || !FileExist(SessionLogFile)
+        return
+    try {
+        f := FileOpen(SessionLogFile, "r", "UTF-8-RAW")
+        size := f.Length
+        if size < LogPos              ; file was recreated -> start over
+            LogPos := 0
+        if size = LogPos {
+            f.Close()
+            return
+        }
+        f.Pos := LogPos
+        txt := f.Read()
+        LogPos := f.Pos
+        f.Close()
+    } catch {
+        return
+    }
+    OutTail := SubStr(OutTail StripAnsi(txt), -1000)   ; keep the last 1000 chars
+    ; last line = text after the final CR/LF (a prompt has no trailing newline)
+    lastLine := RegExReplace(RTrim(OutTail, " `t"), "s)^.*[\r\n]")
+    SetPasswordMode(RegExMatch(lastLine, PasswordPattern) > 0)
+}
+
+; Hide or show the characters typed in the Command box.
+SetPasswordMode(on) {
+    global PwMode
+    if on = PwMode || !IsObject(CmdEdit)
+        return
+    PwMode := on
+    ; EM_SETPASSWORDCHAR: 0x25CF = "●", 0 = normal text
+    SendMessage(0xCC, on ? 0x25CF : 0, 0, CmdEdit)
+    CmdEdit.Redraw()
+    CmdLbl.Text := on ? "Password" : "Command"
 }
 
 ; Timer: detect that KiTTY exited.
@@ -920,7 +1001,8 @@ SendToTerminal(text) {
         ControlSend("{Enter}", , id)
         return true
     }
-    if Settings.Get("sendMode", "paste") = "type" {
+    ; Passwords are always typed, never pasted, so they never touch the clipboard.
+    if PwMode || Settings.Get("sendMode", "type") = "type" {
         ControlSendText(text, , id)
         Sleep(50)
         ControlSend("{Enter}", , id)
@@ -1367,3 +1449,4 @@ LoadConfig()
 ScanVars()
 BuildGui()
 SetTimer(CheckKitty, 1000)
+SetTimer(CheckLog, 150)

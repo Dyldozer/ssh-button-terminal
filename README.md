@@ -10,6 +10,7 @@ An AutoHotkey v2 GUI that docks a real [KiTTY](https://www.9bis.net/kitty/) SSH 
 - Built-in variables `{HOST}` and `{USER}` from the connection bar
 - Host drop-down filled from the `HostList` map (name → address) at the top of the script
 - Cancel button sends Ctrl+C
+- Command box hides typed characters when the last terminal output line contains "password" (via KiTTY's session log; add `LogArg` to your launch command)
 - Multi-command buttons with `#sleep <ms>` pauses and `#` comment lines
 - Button editor: create, edit, delete, duplicate, reorder, rename/delete groups
 - Import/export button sets as JSON
