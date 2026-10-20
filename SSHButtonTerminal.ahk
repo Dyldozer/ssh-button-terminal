@@ -6,12 +6,23 @@
 ;  KiTTY docked inside an AHK GUI + programmable command buttons + variables.
 ;
 ;  Variables: {NAME} tokens in button commands are replaced before sending.
-;  {HOST}, {PORT}, {USER} are BUILT-IN (taken from the connection bar) and
+;  {HOST}, {USER} are BUILT-IN (taken from the connection bar) and
 ;  always win over any user-defined variable of the same name.
 ;  Literal braces: write {{ and }}  (e.g. ${{HOME}} sends ${HOME}).
 ; ============================================================================
 
 ; ---------------------------------------------------------------- globals ---
+; ===== EDIT THIS LIST: hosts shown in the Host drop-down ====================
+global HostList := [
+    "192.168.1.10",
+    "192.168.1.20",
+    "server.example.com"
+]
+; Process name of the terminal program your Connect command launches.
+; Used to find its window after launch so it can be docked in the GUI.
+global KittyExeName := "kitty.exe"
+; ============================================================================
+
 global CfgFile := A_ScriptDir "\SSHButtonTerminal.json"
 global RPW := 360                 ; right panel width
 global Settings := Map()          ; connection + app settings (string keys)
@@ -20,10 +31,10 @@ global Buttons := []              ; array of Map(Name, Group, Command, Desc)
 global Vars := Map()              ; user variables (case-insensitive)
 
 global MainGui := "", TermGui := "", TermLabel := "", SB := ""
-global HostEdit := "", PortEdit := "", UserEdit := "", PathEdit := ""
-global PathLbl := "", HostLbl := "", PortLbl := "", UserLbl := ""
-global BtnBrowse := "", BtnConnect := "", BtnDisconnect := "", PasteChk := ""
-global CmdLbl := "", CmdEdit := "", CmdSend := ""
+global HostDDL := "", UserEdit := ""
+global HostLbl := "", UserLbl := ""
+global BtnConnect := "", BtnDisconnect := "", PasteChk := ""
+global CmdLbl := "", CmdEdit := "", CmdSend := "", CmdCancel := ""
 global VarLbl := "", VarLV := "", VarEdit := "", VarSetBtn := "", VarAddBtn := "", VarRemBtn := ""
 global BtnLbl := "", GroupDDL := "", BtnGui := ""
 global EditBtn := "", ImportBtn := "", ExportBtn := ""
@@ -230,7 +241,7 @@ NewVars() {
 }
 
 DefaultSettings() {
-    return Map("host", "", "port", "22", "user", "", "kittyPath", "", "sendMode", "type", "winW", 1100, "winH", 720)
+    return Map("host", "", "user", "", "sendMode", "type", "winW", 1100, "winH", 720)
 }
 
 MkBtn(name, group, cmd, desc := "") {
@@ -342,12 +353,10 @@ LoadConfig() {
 }
 
 SyncSettings() {
-    if !IsObject(HostEdit)
+    if !IsObject(HostDDL)
         return
-    Settings["host"] := Trim(HostEdit.Value)
-    Settings["port"] := Trim(PortEdit.Value)
+    Settings["host"] := Trim(HostDDL.Text)
     Settings["user"] := Trim(UserEdit.Value)
-    Settings["kittyPath"] := Trim(PathEdit.Value)
     Settings["winW"] := WinW
     Settings["winH"] := WinH
 }
@@ -369,7 +378,7 @@ SaveConfig() {
 ; ============================================== variables / expansion ======
 IsBuiltin(name) {
     n := StrUpper(name)
-    return n = "HOST" || n = "PORT" || n = "USER"
+    return n = "HOST" || n = "USER"
 }
 
 ; Make sure every {NAME} used by any button exists in Vars (keeps values).
@@ -390,8 +399,7 @@ ScanVars() {
 
 GetVarValue(name) {
     switch StrUpper(name) {
-        case "HOST": return Trim(HostEdit.Value)
-        case "PORT": return Trim(PortEdit.Value)
+        case "HOST": return Trim(HostDDL.Text)
         case "USER": return Trim(UserEdit.Value)
     }
     return Vars.Get(name, "")
@@ -448,8 +456,8 @@ SetStatus(text) {
 
 BuildGui() {
     global MainGui, TermGui, TermLabel, SB, WinW, WinH
-    global HostEdit, PortEdit, UserEdit, PathEdit, PathLbl, HostLbl, PortLbl, UserLbl
-    global BtnBrowse, BtnConnect, BtnDisconnect, PasteChk, CmdLbl, CmdEdit, CmdSend
+    global HostDDL, UserEdit, HostLbl, UserLbl
+    global BtnConnect, BtnDisconnect, PasteChk, CmdLbl, CmdEdit, CmdSend, CmdCancel
     global VarLbl, VarLV, VarEdit, VarSetBtn, VarAddBtn, VarRemBtn
     global BtnLbl, GroupDDL, EditBtn, ImportBtn, ExportBtn
 
@@ -460,36 +468,35 @@ BuildGui() {
 
     ; --- connection bar (row 1)
     HostLbl := MainGui.Add("Text", "x10 y13 w32", "Host")
-    HostEdit := MainGui.Add("Edit", "x45 y10 w170", Settings["host"])
-    PortLbl := MainGui.Add("Text", "x225 y13 w28", "Port")
-    PortEdit := MainGui.Add("Edit", "x255 y10 w55 Number", Settings["port"])
-    UserLbl := MainGui.Add("Text", "x320 y13 w30", "User")
-    UserEdit := MainGui.Add("Edit", "x355 y10 w130", Settings["user"])
-    BtnConnect := MainGui.Add("Button", "x500 y9 w90 h26", "Connect")
+    ; Host list comes from the HostList array at the top of the script.
+    hostIdx := ArrIndex(HostList, Settings["host"])
+    HostDDL := MainGui.Add("DropDownList", "x45 y10 w170 r10" (HostList.Length ? " Choose" (hostIdx ? hostIdx : 1) : ""), HostList)
+    ; Make the closed drop-down 23 px tall: CB_SETITEMHEIGHT on the selection
+    ; field (wParam -1). The control adds ~6 px of border to this value.
+    SendMessage(0x153, -1, 17, HostDDL)
+    UserLbl := MainGui.Add("Text", "x225 y13 w30", "User")
+    UserEdit := MainGui.Add("Edit", "x260 y10 w130", Settings["user"])
+    BtnConnect := MainGui.Add("Button", "x405 y9 w90 h26", "Connect")
     BtnConnect.OnEvent("Click", Connect)
-    BtnDisconnect := MainGui.Add("Button", "x596 y9 w90 h26", "Disconnect")
+    BtnDisconnect := MainGui.Add("Button", "x501 y9 w90 h26", "Disconnect")
     BtnDisconnect.OnEvent("Click", Disconnect)
     ; Send mode: unchecked = type text directly (default), checked = paste via clipboard
-    PasteChk := MainGui.Add("Checkbox", "x700 y14 w220", "Paste mode (clipboard)")
+    PasteChk := MainGui.Add("Checkbox", "x605 y14 w220", "Paste mode (clipboard)")
     PasteChk.Value := (Settings.Get("sendMode", "type") = "paste")
     PasteChk.OnEvent("Click", OnPasteToggle)
-
-    ; --- connection bar (row 2): KiTTY path
-    PathLbl := MainGui.Add("Text", "x10 y43 w50", "KiTTY")
-    PathEdit := MainGui.Add("Edit", "x65 y40 w500", FindKitty())
-    BtnBrowse := MainGui.Add("Button", "x575 y39 w90 h26", "Browse...")
-    BtnBrowse.OnEvent("Click", BrowseKitty)
 
     ; --- command row (below terminal)
     CmdLbl := MainGui.Add("Text", "x10 y600 w62", "Command")
     CmdEdit := MainGui.Add("Edit", "x75 y597 w500")
     CmdSend := MainGui.Add("Button", "x585 y596 w70 h26", "Send")
     CmdSend.OnEvent("Click", OnSendCmd)
+    CmdCancel := MainGui.Add("Button", "x660 y596 w70 h26", "Cancel")
+    CmdCancel.OnEvent("Click", SendCtrlC)
     ; Hidden default button: Enter sends, but only when the Command box has focus.
     MainGui.Add("Button", "Default Hidden w0 h0", "SendHidden").OnEvent("Click", OnEnterKey)
 
     ; --- right panel: variables
-    VarLbl := MainGui.Add("Text", "x10 y78 w" RPW, "Variables  (built-in: {HOST} {PORT} {USER})")
+    VarLbl := MainGui.Add("Text", "x10 y45 w" RPW, "Variables  (built-in: {HOST} {USER})")
     VarLbl.SetFont("bold")
     VarLV := MainGui.Add("ListView", "x10 y98 w" RPW " h130 -Multi", ["Name", "Value"])
     VarLV.ModifyCol(1, 110)
@@ -527,7 +534,7 @@ BuildGui() {
     ; Solid background (not BackgroundTrans): with WS_CLIPCHILDREN a transparent
     ; label means nothing ever paints this area, leaving a stale "ghost" image.
     TermLabel := TermGui.Add("Text", "x0 y0 w700 h500 Center 0x200 cWhite Background000000", "Not connected.`nEnter Host / User and press Connect.")
-    TermGui.Show("x10 y78 w700 h500 NoActivate")
+    TermGui.Show("x10 y45 w700 h500 NoActivate")
 
     RefreshVarLV()
     RebuildButtons()
@@ -558,33 +565,31 @@ Layout(w, h) {
     sbh := 24
     try SB.GetPos(, , , &sbh)
     rx := w - RPW - 10
-    top := 78
+    top := 45
     cmdY := h - sbh - 36
     TermW := Max(100, rx - 20)
     TermH := Max(100, cmdY - top - 8)
-
-    PathEdit.Move(65, 40, w - 65 - 105, 24)
-    BtnBrowse.Move(w - 95, 39, 85, 26)
 
     TermGui.Move(10, top, TermW, TermH)
     TermLabel.Move(0, 0, TermW, TermH)
     FitTerminal()
 
     CmdLbl.Move(10, cmdY + 4)
-    CmdEdit.Move(75, cmdY, TermW - 75 - 78, 24)
-    CmdSend.Move(10 + TermW - 70, cmdY - 1, 70, 26)
+    CmdEdit.Move(75, cmdY, TermW - 75 - 154, 24)
+    CmdSend.Move(10 + TermW - 146, cmdY - 1, 70, 26)
+    CmdCancel.Move(10 + TermW - 70, cmdY - 1, 70, 26)
 
-    VarLbl.Move(rx, 78)
-    VarLV.Move(rx, 98, RPW, 130)
-    VarEdit.Move(rx, 233, RPW - 60, 24)
-    VarSetBtn.Move(rx + RPW - 55, 232, 55, 26)
-    VarAddBtn.Move(rx, 264, 90, 26)
-    VarRemBtn.Move(rx + 95, 264, 100, 26)
-    BtnLbl.Move(rx, 300)
-    GroupDDL.Move(rx, 320, RPW)
+    VarLbl.Move(rx, 45)
+    VarLV.Move(rx, 65, RPW, 130)
+    VarEdit.Move(rx, 200, RPW - 60, 24)
+    VarSetBtn.Move(rx + RPW - 55, 199, 55, 26)
+    VarAddBtn.Move(rx, 231, 90, 26)
+    VarRemBtn.Move(rx + 95, 231, 100, 26)
+    BtnLbl.Move(rx, 267)
+    GroupDDL.Move(rx, 287, RPW)
 
     BtnX := rx
-    BtnY := 354
+    BtnY := 321
     BtnAreaH := Max(60, cmdY - BtnY - 8)
     if IsObject(BtnGui)
         BtnGui.Move(BtnX, BtnY, RPW, BtnAreaH)
@@ -696,28 +701,6 @@ OnVarRemove(*) {
     SaveConfig()
 }
 
-; ----------------------------------------------------------- KiTTY path ----
-FindKitty() {
-    p := Settings["kittyPath"]
-    if p != "" && FileExist(p)
-        return p
-    for name in ["kitty.exe", "kitty_portable.exe"] {
-        c := A_ScriptDir "\" name
-        if FileExist(c)
-            return c
-    }
-    return p
-}
-
-BrowseKitty(*) {
-    start := PathEdit.Value != "" ? PathEdit.Value : A_ScriptDir
-    f := FileSelect(3, start, "Select KiTTY executable", "Executables (*.exe)")
-    if f != "" {
-        PathEdit.Value := f
-        Settings["kittyPath"] := f
-    }
-}
-
 OnMainClose(*) {
     if KPid
         try ProcessClose(KPid)
@@ -786,32 +769,20 @@ Connect(*) {
     }
     SyncSettings()
     host := Settings["host"]
-    port := Settings["port"] = "" ? "22" : Settings["port"]
     user := Settings["user"]
     if host = "" {
-        MsgBox("Please enter a host.", "Connect", "Icon!")
+        MsgBox("Please choose a host (edit HostList at the top of the script).", "Connect", "Icon!")
         return
-    }
-    if !RegExMatch(port, "^\d+$") || Integer(port) < 1 || Integer(port) > 65535 {
-        MsgBox("Invalid port.", "Connect", "Icon!")
-        return
-    }
-    path := Settings["kittyPath"]
-    if path = "" || !FileExist(path) {
-        MsgBox("KiTTY executable not found. Please select kitty.exe (or kitty_portable.exe).", "KiTTY not found", "Icon!")
-        BrowseKitty()
-        SyncSettings()
-        path := Settings["kittyPath"]
-        if path = "" || !FileExist(path)
-            return
     }
     SaveConfig()
 
     prefix := (user != "" ? user "@" : "")
     target := prefix host
-    cmd := '"' path '" -ssh ' target ' -P ' port
+    ; Replace with your own launch command. 'host', 'user' and 'target'
+    ; (user@host) are available here.
+    cmd := "placeholder"
     pid := 0
-    SplitPath(path, &exeName)
+    exeName := KittyExeName
     before := SnapshotWindows()
     try {
         Run(cmd, , , &pid)
@@ -852,7 +823,7 @@ Connect(*) {
     KHwnd := hwnd
     KPid := WinGetPID("ahk_id " hwnd)
     EmbedKitty(hwnd)
-    SetConn("Connected: " target ":" port)
+    SetConn("Connected: " target)
     SetStatus("Connected. Type your password in the terminal.")
     FocusTerminal()
 }
@@ -1018,6 +989,17 @@ OnEnterKey(*) {
         OnVarSet()
 }
 
+; Cancel button: send Ctrl+C (ETX, char 3) to interrupt the running command.
+SendCtrlC(*) {
+    if !KHwnd || !DllCall("IsWindow", "Ptr", KHwnd) {
+        SetStatus("Not connected.")
+        return
+    }
+    ControlSendText(Chr(3), , "ahk_id " KHwnd)
+    SetStatus("Sent Ctrl+C.")
+    FocusTerminal()
+}
+
 OnPasteToggle(*) {
     Settings["sendMode"] := PasteChk.Value ? "paste" : "type"
     SaveConfig()
@@ -1076,7 +1058,7 @@ OpenEditor(*) {
     b.OnEvent("Click", EdDuplicate)
     b := EdGui.Add("Button", "x+6 yp w75", "Close")
     b.OnEvent("Click", EdClose)
-    EdGui.Add("Text", "x495 y380 w395 r6", "Help: use {VARNAME} for variables (filled in the Variables panel; {HOST} {PORT} {USER} are built-in). One command per line. A line '#sleep 500' pauses 500 ms. Other lines starting with # are comments. Use {{ and }} for literal braces, e.g. ${{HOME}}.")
+    EdGui.Add("Text", "x495 y380 w395 r6", "Help: use {VARNAME} for variables (filled in the Variables panel; {HOST} {USER} are built-in). One command per line. A line '#sleep 500' pauses 500 ms. Other lines starting with # are comments. Use {{ and }} for literal braces, e.g. ${{HOME}}.")
 
     EdRefreshGroups("All")
     EdFillLV(0)
