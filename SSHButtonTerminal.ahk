@@ -546,7 +546,8 @@ BuildGui() {
     SetStatus("Ready.")
 
     ; --- child GUI hosting the KiTTY window
-    TermGui := Gui("-Caption +Parent" MainGui.Hwnd " +0x02000000")
+    ; +0x02000000 WS_CLIPCHILDREN, +0x04000000 WS_CLIPSIBLINGS (no painting over neighbours)
+    TermGui := Gui("-Caption +Parent" MainGui.Hwnd " +0x02000000 +0x04000000")
     TermGui.BackColor := "000000"
     TermGui.SetFont("s11", "Segoe UI")
     ; Solid background (not BackgroundTrans): with WS_CLIPCHILDREN a transparent
@@ -574,7 +575,14 @@ OnMainSize(gui, minMax, w, h) {
         return
     WinW := w
     WinH := h
+    ; Freeze painting while controls move, then repaint everything once.
+    ; Without this, moved controls leave stale pieces behind (artifacts).
+    hwnd := MainGui.Hwnd
+    DllCall("SendMessage", "Ptr", hwnd, "UInt", 0x000B, "Ptr", 0, "Ptr", 0)   ; WM_SETREDRAW off
     Layout(w, h)
+    DllCall("SendMessage", "Ptr", hwnd, "UInt", 0x000B, "Ptr", 1, "Ptr", 0)   ; WM_SETREDRAW on
+    ; RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME | RDW_UPDATENOW
+    DllCall("RedrawWindow", "Ptr", hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x0001 | 0x0004 | 0x0080 | 0x0400 | 0x0100)
 }
 
 ; Reposition everything for a client size of w x h.
@@ -631,7 +639,7 @@ RebuildButtons() {
     global BtnGui
     if IsObject(BtnGui)
         BtnGui.Destroy()
-    BtnGui := Gui("-Caption +Parent" MainGui.Hwnd)
+    BtnGui := Gui("-Caption +Parent" MainGui.Hwnd " +0x04000000")   ; WS_CLIPSIBLINGS
     BtnGui.MarginX := 0
     BtnGui.MarginY := 0
     BtnGui.SetFont("s9", "Segoe UI")
